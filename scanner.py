@@ -263,68 +263,63 @@ def send_telegram(message):
         return False
 
 TELEGRAM_MAX_CHARS = 4096
-TABLE_NAME_WIDTH = 15  # Syarikat column is truncated to this width so rows stay aligned
-
-def _fmt_row(code_w, name_w, price_w, trigger_w, code, name, harga, trigger):
-    name_trunc = (name[: TABLE_NAME_WIDTH - 1] + "…") if len(name) > TABLE_NAME_WIDTH else name
-    return f"{code:<{code_w}} {name_trunc:<{name_w}} {harga:<{price_w}} {trigger:<{trigger_w}}"
-
-SIGNAL_SHORT_MAP = {
-    "Bullish Zone": "BZ",
-    "Pending Breakout": "PB"
-}
 
 def format_results_table(results):
-    """Builds the EOD scan result as a monospace table with columns:
-    Code, Syarikat, Harga, Trigger — one row per stock that matched.
-
-    Telegram caps a single message at 4096 characters, so if the full
-    table doesn't fit, it is split across multiple messages, each a
-    complete, independently-readable table (repeats the header/date).
-    Returns a list of message strings (empty list if no results).
+    """Builds the EOD scan result in clean list-style format:
+    
+    AMBANK (1015): RM 6.88 🚀 Pending Breakout
+    ABMB (2488): RM 4.98 🟢 Bullish Zone
+    SAMAIDEN (0223): RM 1.76 🔥 Bullish Zone | Pending Breakout
     """
     if not results:
         return []
 
     today = get_today_str()
-    title = f"<b>📊 EOD Bursa Scanner — {today}</b>\n<i>📌 Legend: BZ = Bullish Zone | PB = Pending Breakout</i>\n\n"
+    header = f"<b>📊 EOD Bursa Scanner — {today}</b>\n\n"
 
-    formatted_results = []
+    entries = []
     for r in results:
-        short_sigs = [SIGNAL_SHORT_MAP.get(s, s) for s in r["signals"]]
-        formatted_results.append({
-            "ticker": r["ticker"],
-            "name": r["name"],
-            "price": r["price"],
-            "triggers": ", ".join(short_sigs)
-        })
-
-    code_w = max(4, max(len(r["ticker"]) for r in formatted_results))
-    name_w = min(TABLE_NAME_WIDTH, max(8, max(len(r["name"]) for r in formatted_results)))
-    price_w = 7
-    trigger_w = max(7, max(len(r["triggers"]) for r in formatted_results))
-
-    header_row = _fmt_row(code_w, name_w, price_w, trigger_w, "Code", "Syarikat", "Harga", "Trigger")
-    sep_row = "-" * len(header_row)
-
-    def wrap(lines):
-        body = html.escape("\n".join(lines))
-        return f"{title}<pre>{body}</pre>"
+        code = r["ticker"].split(".")[0]
+        name = html.escape(r["name"])
+        price = r["price"]
+        price_str = f"{price:.2f}" if abs(price - round(price, 2)) < 1e-5 else f"{price:.3f}"
+        
+        has_bullish = "Bullish Zone" in r["signals"]
+        has_breakout = "Pending Breakout" in r["signals"]
+        
+        if has_bullish and has_breakout:
+            emoji = "🔥"
+            trigger_text = "Bullish Zone | Pending Breakout"
+        elif has_breakout:
+            emoji = "🚀"
+            trigger_text = "Pending Breakout"
+        elif has_bullish:
+            emoji = "🟢"
+            trigger_text = "Bullish Zone"
+        else:
+            emoji = "⚡"
+            trigger_text = " | ".join(r["signals"])
+            
+        entry = f"{name} ({code}): RM {price_str} {emoji} {trigger_text}"
+        entries.append(entry)
 
     messages = []
-    current_lines = [header_row, sep_row]
+    current_chunk = []
+    current_len = len(header)
 
-    for r in formatted_results:
-        row = _fmt_row(
-            code_w, name_w, price_w, trigger_w,
-            r["ticker"], r["name"], f"{r['price']:.3f}", r["triggers"],
-        )
-        if len(wrap(current_lines + [row])) > TELEGRAM_MAX_CHARS - 20:
-            messages.append(wrap(current_lines))
-            current_lines = [header_row, sep_row]
-        current_lines.append(row)
+    for entry in entries:
+        entry_len = len(entry) + 2
+        if current_chunk and (current_len + entry_len > TELEGRAM_MAX_CHARS - 50):
+            messages.append(header + "\n\n".join(current_chunk))
+            current_chunk = [entry]
+            current_len = len(header) + entry_len
+        else:
+            current_chunk.append(entry)
+            current_len += entry_len
 
-    messages.append(wrap(current_lines))
+    if current_chunk:
+        messages.append(header + "\n\n".join(current_chunk))
+
     return messages
 
 def scan_ticker(ticker, name, alerted_set=None):
