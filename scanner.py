@@ -196,40 +196,68 @@ def compute_signals(df):
     return signals
 
 def send_telegram(message):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    token = (os.getenv("BOT_TOKEN") or "").strip().strip('"').strip("'")
+    chat_id = (os.getenv("CHAT_ID") or "").strip().strip('"').strip("'")
+
+    if not token or not chat_id:
         logging.warning("⚠️ Telegram credentials missing in GitHub Secrets.")
         return False
 
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "HTML"
-    }
-    
+    def _post(target_chat_id):
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload = {
+            "chat_id": target_chat_id,
+            "text": message,
+            "parse_mode": "HTML"
+        }
+        return requests.post(url, data=payload, timeout=20)
+
     try:
-        r = requests.post(url, data=payload, timeout=20)
-        r.raise_for_status()
-        return True
-    except requests.exceptions.HTTPError as e:
-        err_msg = e.response.text if e.response is not None else str(e)
-        if e.response is not None and e.response.status_code == 429:
-            try:
-                retry_after = int(e.response.json().get("parameters", {}).get("retry_after", 30))
-            except Exception:
-                retry_after = 30
-            logging.warning(f"⚠️ Telegram rate limit hit (429). Retrying after {retry_after} seconds...")
-            time_module.sleep(retry_after)
-            try:
-                r = requests.post(url, data=payload, timeout=20)
-                r.raise_for_status()
-                return True
-            except Exception as retry_err:
-                logging.error(f"❌ Telegram API retry failed: {retry_err}")
+        r = _post(chat_id)
+        if not r.ok:
+            resp_text = r.text
+            resp_json = r.json() if r.content else {}
+            desc = resp_json.get("description", "")
+            
+            # Retry with - prefix if chat_id missing minus sign for channel/group
+            if "chat not found" in desc.lower() and not chat_id.startswith("-"):
+                fallbacks = [f"-{chat_id}"]
+                if not chat_id.startswith("100"):
+                    fallbacks.append(f"-100{chat_id}")
+                for fb in fallbacks:
+                    logging.info(f"🔄 Retrying with fallback chat_id: '{fb}'...")
+                    r_fb = _post(fb)
+                    if r_fb.ok:
+                        logging.info(f"✅ Succeeded using fallback chat_id: '{fb}'!")
+                        return True
+
+            if r.status_code == 429:
+                try:
+                    retry_after = int(resp_json.get("parameters", {}).get("retry_after", 30))
+                except Exception:
+                    retry_after = 30
+                logging.warning(f"⚠️ Telegram rate limit hit (429). Retrying after {retry_after} seconds...")
+                time_module.sleep(retry_after)
+                r_retry = _post(chat_id)
+                if r_retry.ok:
+                    return True
+                logging.error(f"❌ Telegram API retry failed: {r_retry.text}")
                 return False
-        else:
-            logging.error(f"❌ Telegram HTTP Error: {err_msg}")
+
+            logging.error(f"❌ Telegram HTTP Error: {resp_text}")
+            if "chat not found" in desc.lower():
+                logging.error(
+                    "💡 'chat not found' troubleshooting steps:\n"
+                    "   1. Make sure your Telegram bot has been ADDED TO YOUR CHANNEL/GROUP and promoted to ADMIN.\n"
+                    "   2. Check CHAT_ID in GitHub Secrets:\n"
+                    "      - Channels start with -100 (e.g., -1001234567890).\n"
+                    "      - Groups start with - (e.g., -987654321).\n"
+                    "      - Personal chats require sending /start to your bot in Telegram first.\n"
+                    "   3. Verify chat ID using @getmyid_bot in Telegram."
+                )
             return False
+
+        return True
     except Exception as e:
         logging.error(f"❌ Telegram connection/request failed: {e}")
         return False
