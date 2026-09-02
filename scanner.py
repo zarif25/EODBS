@@ -265,16 +265,11 @@ def send_telegram(message):
 TELEGRAM_MAX_CHARS = 4096
 
 def format_results_table(results):
-    """Builds the EOD scan result grouped by technical trigger:
-
-    🚀 Double Momentum (Bullish + Breakout):
-    SAMAIDEN (1.76), NATGATE (1.78), IOICORP (4.79)
-
-    🔥 Pending Breakout Watchlist:
-    AMBANK (6.88), PBBANK (4.94), TIMECOM (6.04)
-
-    🟢 Bullish Zone Focus:
-    TDM (0.23), ABMB (4.98), HIBISCS (2.26)
+    """Builds the EOD scan result in clean list-style format:
+    
+    AMBANK (1015): RM 6.88 🚀 Pending Breakout
+    ABMB (2488): RM 4.98 🟢 Bullish Zone
+    SAMAIDEN (0223): RM 1.76 🔥 Bullish Zone | Pending Breakout
     """
     if not results:
         return []
@@ -282,65 +277,48 @@ def format_results_table(results):
     today = get_today_str()
     header = f"<b>📊 EOD Bursa Scanner — {today}</b>\n\n"
 
-    double_momentum = []
-    pending_breakout = []
-    bullish_zone = []
-
+    entries = []
     for r in results:
+        code = r["ticker"].split(".")[0]
         name = html.escape(r["name"])
         price = r["price"]
         price_str = f"{price:.2f}" if abs(price - round(price, 2)) < 1e-5 else f"{price:.3f}"
-        item = f"{name} ({price_str})"
-
+        
         has_bullish = "Bullish Zone" in r["signals"]
         has_breakout = "Pending Breakout" in r["signals"]
-
+        
         if has_bullish and has_breakout:
-            double_momentum.append(item)
+            emoji = "🔥"
+            trigger_text = "Bullish Zone | Pending Breakout"
         elif has_breakout:
-            pending_breakout.append(item)
+            emoji = "🚀"
+            trigger_text = "Pending Breakout"
         elif has_bullish:
-            bullish_zone.append(item)
-
-    sections = []
-
-    if double_momentum:
-        sec = "<b>🚀 Double Momentum (Bullish + Breakout):</b>\n" + ", ".join(double_momentum)
-        sections.append(sec)
-
-    if pending_breakout:
-        sec = "<b>🔥 Pending Breakout Watchlist:</b>\n" + ", ".join(pending_breakout)
-        sections.append(sec)
-
-    if bullish_zone:
-        sec = "<b>🟢 Bullish Zone Focus:</b>\n" + ", ".join(bullish_zone)
-        sections.append(sec)
-
-    full_body = "\n\n".join(sections)
-    full_message = header + full_body
-
-    if len(full_message) <= TELEGRAM_MAX_CHARS:
-        return [full_message]
+            emoji = "🟢"
+            trigger_text = "Bullish Zone"
+        else:
+            emoji = "⚡"
+            trigger_text = " | ".join(r["signals"])
+            
+        entry = f"{name} ({code}): RM {price_str} {emoji} {trigger_text}"
+        entries.append(entry)
 
     messages = []
-    for sec in sections:
-        if len(header + sec) <= TELEGRAM_MAX_CHARS:
-            messages.append(header + sec)
+    current_chunk = []
+    current_len = len(header)
+
+    for entry in entries:
+        entry_len = len(entry) + 2
+        if current_chunk and (current_len + entry_len > TELEGRAM_MAX_CHARS - 50):
+            messages.append(header + "\n\n".join(current_chunk))
+            current_chunk = [entry]
+            current_len = len(header) + entry_len
         else:
-            sec_header, sec_body = sec.split(":\n", 1)
-            items = sec_body.split(", ")
-            chunk = []
-            chunk_len = len(header) + len(sec_header) + 3
-            for it in items:
-                if chunk and (chunk_len + len(it) + 2 > TELEGRAM_MAX_CHARS):
-                    messages.append(header + f"{sec_header}:\n" + ", ".join(chunk))
-                    chunk = [it]
-                    chunk_len = len(header) + len(sec_header) + 3 + len(it)
-                else:
-                    chunk.append(it)
-                    chunk_len += len(it) + 2
-            if chunk:
-                messages.append(header + f"{sec_header}:\n" + ", ".join(chunk))
+            current_chunk.append(entry)
+            current_len += entry_len
+
+    if current_chunk:
+        messages.append(header + "\n\n".join(current_chunk))
 
     return messages
 
