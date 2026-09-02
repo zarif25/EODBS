@@ -269,6 +269,11 @@ def _fmt_row(code_w, name_w, price_w, trigger_w, code, name, harga, trigger):
     name_trunc = (name[: TABLE_NAME_WIDTH - 1] + "…") if len(name) > TABLE_NAME_WIDTH else name
     return f"{code:<{code_w}} {name_trunc:<{name_w}} {harga:<{price_w}} {trigger:<{trigger_w}}"
 
+SIGNAL_SHORT_MAP = {
+    "Bullish Zone": "BZ",
+    "Pending Breakout": "PB"
+}
+
 def format_results_table(results):
     """Builds the EOD scan result as a monospace table with columns:
     Code, Syarikat, Harga, Trigger — one row per stock that matched.
@@ -282,12 +287,22 @@ def format_results_table(results):
         return []
 
     today = get_today_str()
-    title = f"<b>📊 EOD Bursa Scanner — {today}</b>\n\n"
+    title = f"<b>📊 EOD Bursa Scanner — {today}</b>\n<i>📌 Legend: BZ = Bullish Zone | PB = Pending Breakout</i>\n\n"
 
-    code_w = max(4, max(len(r["ticker"]) for r in results))
-    name_w = min(TABLE_NAME_WIDTH, max(8, max(len(r["name"]) for r in results)))
+    formatted_results = []
+    for r in results:
+        short_sigs = [SIGNAL_SHORT_MAP.get(s, s) for s in r["signals"]]
+        formatted_results.append({
+            "ticker": r["ticker"],
+            "name": r["name"],
+            "price": r["price"],
+            "triggers": ", ".join(short_sigs)
+        })
+
+    code_w = max(4, max(len(r["ticker"]) for r in formatted_results))
+    name_w = min(TABLE_NAME_WIDTH, max(8, max(len(r["name"]) for r in formatted_results)))
     price_w = 7
-    trigger_w = max(7, max(len(", ".join(r["signals"])) for r in results))
+    trigger_w = max(7, max(len(r["triggers"]) for r in formatted_results))
 
     header_row = _fmt_row(code_w, name_w, price_w, trigger_w, "Code", "Syarikat", "Harga", "Trigger")
     sep_row = "-" * len(header_row)
@@ -299,12 +314,11 @@ def format_results_table(results):
     messages = []
     current_lines = [header_row, sep_row]
 
-    for r in results:
+    for r in formatted_results:
         row = _fmt_row(
             code_w, name_w, price_w, trigger_w,
-            r["ticker"], r["name"], f"{r['price']:.3f}", ", ".join(r["signals"]),
+            r["ticker"], r["name"], f"{r['price']:.3f}", r["triggers"],
         )
-        # +1 rough allowance for the newline joining this row
         if len(wrap(current_lines + [row])) > TELEGRAM_MAX_CHARS - 20:
             messages.append(wrap(current_lines))
             current_lines = [header_row, sep_row]
