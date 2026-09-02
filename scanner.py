@@ -14,6 +14,7 @@ import pandas as pd
 import yfinance as yf
 import requests
 import holidays
+import html
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(message)s")
@@ -203,7 +204,7 @@ def send_telegram(message):
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": message,
-        "parse_mode": "Markdown"
+        "parse_mode": "HTML"
     }
     
     try:
@@ -211,6 +212,7 @@ def send_telegram(message):
         r.raise_for_status()
         return True
     except requests.exceptions.HTTPError as e:
+        err_msg = e.response.text if e.response is not None else str(e)
         if e.response is not None and e.response.status_code == 429:
             try:
                 retry_after = int(e.response.json().get("parameters", {}).get("retry_after", 30))
@@ -226,7 +228,7 @@ def send_telegram(message):
                 logging.error(f"❌ Telegram API retry failed: {retry_err}")
                 return False
         else:
-            logging.error(f"❌ Telegram HTTP Error: {e}")
+            logging.error(f"❌ Telegram HTTP Error: {err_msg}")
             return False
     except Exception as e:
         logging.error(f"❌ Telegram connection/request failed: {e}")
@@ -252,7 +254,7 @@ def format_results_table(results):
         return []
 
     today = get_today_str()
-    title = f"📊 *EOD Bursa Scanner* — {today}\n\n"
+    title = f"<b>📊 EOD Bursa Scanner — {today}</b>\n\n"
 
     code_w = max(4, max(len(r["ticker"]) for r in results))
     name_w = min(TABLE_NAME_WIDTH, max(8, max(len(r["name"]) for r in results)))
@@ -263,7 +265,8 @@ def format_results_table(results):
     sep_row = "-" * len(header_row)
 
     def wrap(lines):
-        return f"{title}```\n" + "\n".join(lines) + "\n```"
+        body = html.escape("\n".join(lines))
+        return f"{title}<pre>{body}</pre>"
 
     messages = []
     current_lines = [header_row, sep_row]
