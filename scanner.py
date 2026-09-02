@@ -443,7 +443,8 @@ def main():
             alerted_set.add(res["ticker"])
         save_alerted_today(alerted_set)
     else:
-        logging.warning("⚠️ Not all summary messages sent successfully; alerted_today.json left unchanged so the next run can retry.")
+        logging.error("❌ Not all summary messages sent successfully; alerted_today.json left unchanged.")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

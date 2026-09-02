@@ -9,6 +9,11 @@ on:
         description: 'Reason for manual run (optional)'
         required: false
         default: 'Manual test'
+      force:
+        description: 'Force run (bypass schedule/holiday checks)'
+        required: false
+        type: boolean
+        default: true
   schedule:
     # Scheduled time in UTC (Malaysia Time is UTC+8)
     # 8:00 AM MYT -> 00:00 UTC, Monday-Friday only.
@@ -47,6 +52,7 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+          FORCE_RUN: ${{ inputs.force || 'false' }}
         run: python scanner.py
 
       - name: Commit dedup tracking file
