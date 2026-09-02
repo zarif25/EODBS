@@ -1,0 +1,114 @@
+name: EOD Bursa Scanner
+
+on:
+  repository_dispatch:
+    types: [run-scan]
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for manual run (optional)'
+        required: false
+        default: 'Manual test'
+  schedule:
+    # Scheduled time in UTC (Malaysia Time is UTC+8)
+    # 8:00 AM MYT -> 00:00 UTC, Monday-Friday only.
+    # (Weekends and Malaysian public holidays are additionally skipped by
+    # should_run() inside scanner.py, so this schedule is a safe superset.)
+    - cron: '0 0 * * 1-5'
+
+concurrency:
+  group: eod-bursa-scanner
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: EOD Scan Bursa Malaysia
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4.2.2
+        with:
+          clean: true
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5.3.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run EOD market scanner
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python scanner.py
+
+      - name: Commit dedup tracking file
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if [ -z "$(git status --porcelain alerted_today.json)" ]; then
+            echo "No changes to alerted_today.json"
+            exit 0
+          fi
+
+          cp alerted_today.json /tmp/my_alerted.json
+
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git reset --hard origin/main
+
+            python3 - <<'PY'
+          import json
+
+          with open("/tmp/my_alerted.json") as f:
+              mine = json.load(f)
+          with open("alerted_today.json") as f:
+              remote = json.load(f)
+
+          merged_alerted = sorted(set(mine.get("alerted", [])) | set(remote.get("alerted", [])))
+          merged = {
+              "date": mine.get("date") or remote.get("date"),
+              "alerted": merged_alerted,
+          }
+
+          with open("alerted_today.json", "w") as f:
+              json.dump(merged, f, indent=4)
+              f.write("\n")
+          PY
+
+            if [ -z "$(git status --porcelain alerted_today.json)" ]; then
+              echo "Already up to date after merge, nothing to push"
+              exit 0
+            fi
+
+            git add alerted_today.json
+            git commit -m "Update alerted_today.json [skip ci]"
+
+            if git push origin HEAD:main; then
+              echo "Pushed on attempt $attempt"
+              exit 0
+            fi
+
+            echo "Push attempt $attempt lost the race, retrying..."
+            sleep $((RANDOM % 5 + 1))
+          done
+
+          echo "::error::Failed to push alerted_today.json after 5 attempts"
+          exit 1
+
+      - name: Upload scan log (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4.4.3
+        with:
+          name: scan-log-${{ github.run_id }}
+          path: '*.log'
+          retention-days: 7
