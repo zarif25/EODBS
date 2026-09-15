@@ -13,13 +13,7 @@ on:
         required: false
         type: boolean
         default: true
-  schedule:
-    # GitHub cron sentiasa dalam UTC. MYT = UTC+8.
-    # 08:30 MYT = 00:30 UTC, Mon-Fri
-    - cron: '30 0 * * 1-5'
-    # 13:50 MYT = 05:50 UTC, Mon-Fri
-    - cron: '50 5 * * 1-5'
-concurrency:
+  concurrency:
   group: eod-bursa-scanner
   cancel-in-progress: false
 jobs:
