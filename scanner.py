@@ -21,16 +21,17 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(me
 
 # --- CONFIGURATION ---
 # EOD Bursa Scanner: runs once daily at 8:00 AM MYT (pre-market), scanning
-# the previous trading day's End-Of-Day data. Only two signals are checked:
-#   1. Bullish Zone   -> Price > EMA20 > EMA50 > EMA200
+# the previous trading day's End-Of-Day data. Signals checked:
+#   1. Bullish Zone     -> Price > EMA20 > EMA50 > EMA200
 #   2. Pending Breakout -> price approaching (but not yet at) its 52-week high
+#   3. Price Up         -> price is up > 7% over the last 2 trading days
 # Both signals additionally require: close above previous daily close, and
 # volume above 500,000 shares.
 MIN_PRICE = 0.205
 MAX_PRICE = 7.05
 MIN_VOLUME = 500_000
 PENDING_BREAKOUT_PCT = 7.0
-
+PRICE_UP_2D_PCT = 7.0
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -159,6 +160,7 @@ def compute_signals(df):
     Triggers:
       - Bullish Zone     : Price > EMA20 > EMA50 > EMA200
       - Pending Breakout : price within PENDING_BREAKOUT_PCT of 52-week high
+      - Price Up         : price is up > PRICE_UP_2D_PCT over the last 2 trading days
 
     Rule: today's close must be above the previous trading day's close.
     """
@@ -172,28 +174,35 @@ def compute_signals(df):
 
     latest = df.iloc[-1]
     prev = df.iloc[-2]
+    prev2 = df.iloc[-3]
+
     current_price = float(latest["Close"])
     prev_close = float(prev["Close"])
+    prev2_close = float(prev2["Close"])
 
-    # Rule: price must close above yesterday's / previous daily close
+    # Rule: today's close must be above yesterday's / previous daily close
     if current_price <= prev_close:
         return []
 
     signals = []
 
-    # Bullish Zone (Price > EMA20 > EMA50 > EMA200)
+    # 1. Bullish Zone (Price > EMA20 > EMA50 > EMA200)
     if not pd.isna(latest["EMA20"]) and not pd.isna(latest["EMA50"]) and not pd.isna(latest["EMA200"]):
         if current_price > latest["EMA20"] > latest["EMA50"] > latest["EMA200"]:
             signals.append("Bullish Zone")
 
+    # 2. Pending Breakout (within PENDING_BREAKOUT_PCT of 52WH, but not yet at it)
     high_52w = float(df.tail(252)["High"].max())
-
-    # Pending Breakout (within PENDING_BREAKOUT_PCT of 52WH, but not yet at it)
     if high_52w > 0 and high_52w * (1 - PENDING_BREAKOUT_PCT / 100) <= current_price < high_52w * 0.995:
         signals.append("Pending Breakout")
 
-    return signals
+    # 3. Price Up (Price up > PRICE_UP_2D_PCT over the last 2 days)
+    if prev2_close > 0:
+        pct_gain_2d = ((current_price - prev2_close) / prev2_close) * 100
+        if pct_gain_2d > PRICE_UP_2D_PCT:
+            signals.append("Price Up")
 
+    return signals
 
 
 def send_telegram(message):
@@ -270,7 +279,7 @@ def format_results_table(results):
     
     AMBANK (1015): RM 6.88 🚀 Pending Breakout
     ABMB (2488): RM 4.98 🟢 Bullish Zone
-    SAMAIDEN (0223): RM 1.76 🔥 Bullish Zone | Pending Breakout
+    SAMAIDEN (0223): RM 1.76 🔥 Bullish Zone | Pending Breakout | Price Up
     """
     if not results:
         return []
@@ -287,19 +296,26 @@ def format_results_table(results):
         
         has_bullish = "Bullish Zone" in r["signals"]
         has_breakout = "Pending Breakout" in r["signals"]
+        has_price_up = "Price Up" in r["signals"]
         
-        if has_bullish and has_breakout:
+        if has_bullish and has_breakout and has_price_up:
+            emoji = "💥"
+        elif has_bullish and has_breakout:
             emoji = "🔥"
-            trigger_text = "Bullish Zone | Pending Breakout"
+        elif has_breakout and has_price_up:
+            emoji = "🚀"
+        elif has_bullish and has_price_up:
+            emoji = "⚡"
+        elif has_price_up:
+            emoji = "📈"
         elif has_breakout:
             emoji = "🚀"
-            trigger_text = "Pending Breakout"
         elif has_bullish:
             emoji = "🟢"
-            trigger_text = "Bullish Zone"
         else:
             emoji = "⚡"
-            trigger_text = " | ".join(r["signals"])
+
+        trigger_text = " | ".join(r["signals"])
             
         entry = f"{name} ({code}): RM {price_str} {emoji} {trigger_text}"
         entries.append(entry)
